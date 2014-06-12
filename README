@@ -1,0 +1,16 @@
+FaT AS ( Fedora and Trello + ArchivesSpace Plugin )
+---------------------------------------------------
+
+This is was an entry to the Open Repositories 2014 Developer Challenge by
+Chris Fitzpatrick and Leila Belle Sterman
+
+This is a toy that is just demonstrates how to write an ArchivesSpace 
+plugin. 
+
+
+A good tutorial on plugins can be found here : 
+http://teaspoon-consulting.com/articles/archivesspace-plugins.html
+
+
+
+

@@ -1,0 +1,6 @@
+$(function() {
+
+  var type = $("#job_import_type_").val();
+  alert(type);
+
+})

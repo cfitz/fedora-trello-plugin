@@ -1,0 +1,149 @@
+require 'digest'
+
+class StreamingImport
+
+private
+ def do_create(record, noerror = false)
+    begin
+      if record['position'] && @position_offsets[record['uri']]
+        record['position'] += @position_offsets[record['uri']]
+      end
+
+      json = to_jsonmodel(record, true)
+
+      model = model_for(record['jsonmodel_type'])
+
+      obj = if model.respond_to?(:ensure_exists)
+              model.ensure_exists(json, nil)
+            elsif json.id
+		File.open("/tmp/f.txt","w") { |f| f << record.inspect } 
+	      oid = record['uri'].split('/').last
+              obj = model_for(record['jsonmodel_type']).get_or_die(oid.to_i)
+	      obj.update_from_json( record ) 
+	    else
+              model_for(record['jsonmodel_type']).create_from_json(json, :migration => @migration )
+            end
+
+      @ticker.log("Created: #{record['uri']}")
+
+      obj.uri
+    rescue
+      if noerror
+        nil
+      else
+        raise $!, "Problem creating '#{title_or_fallback(record)}': #{$!}"
+      end
+    end
+  end
+
+end
+
+
+module ASpaceImport
+    module AssetConverter
+
+      module ClassMethods
+
+        def configuration
+          @configuration ||= self.configure
+        end
+
+
+        def self.included(base)
+          self.extend(ClassMethods)
+        end
+
+      end
+
+        def send_to_fedora(uri, req)
+          res = Net::HTTP.start(uri.hostname, uri.port) do |http|
+            http.request(req)
+          end
+          case res
+          when Net::HTTPSuccess, Net::HTTPRedirection
+             res 
+          else
+             res.value
+          end
+        end
+
+        def run
+          
+          begin 
+            json = JSON.parse(IO.read(@input_file))
+          rescue 
+            return
+          end
+            
+          dobj = ASpaceImport::JSONModel(:digital_object).from_hash(json) 
+	  dobj.uri = json['uri']
+          files = []
+          Dir.glob(File.join(File.dirname(@input_file), "**")).each do |file|
+              next if file == @input_file
+              files << file 
+          end
+           
+          uri = URI("#{AppConfig[:fedora_url]}/rest")
+          request = Net::HTTP::Post.new(uri.request_uri, {'Content-Type' => 'text/json'})
+          request.body= json.to_s
+        
+          fedora_res = send_to_fedora(uri, request)  
+          parent_location = URI.join( fedora_res['location'], '..') 
+                                  
+          files.each do |f|
+            checksum = Digest::SHA1.file(open(f)).hexdigest 
+            parent = URI("#{parent_location.to_s}?checksum=urn:sha1:#{checksum}") 
+            fedora_request = Net::HTTP::Post.new(parent.request_uri) 
+            
+            file_to_upload = IO.read(f) 
+            fedora_request.body= file_to_upload
+
+            file_upload_response = send_to_fedora(parent, fedora_request) 
+            upload_location = URI(file_upload_response['location']) 
+            dobj.file_versions <<  ASpaceImport::JSONModel(:file_version).new(
+                            :file_uri => "#{upload_location.to_s}/fcr:content",
+                            :checksum => checksum, 
+                            :file_size_bytes => file_to_upload.size, 
+                            :checksum_method => "sha1")
+          end
+            File.open('/tmp/f.txt', 'w') {|f| f << files.inspect } 
+            @batch << dobj
+            @batch.flush
+        end
+
+    end
+
+
+end
+
+class FedoraAssetConverter < Converter
+  include ASpaceImport::AssetConverter
+  def self.import_types(show_hidden = false)
+      [
+       {
+         :name => "fedora_asset_converter",
+         :description => "Import files versions into fedora"
+       }
+      ]
+  end
+
+
+  def self.instance_for(type, input_file)
+    if type == "fedora_asset_converter"
+      self.new(input_file)
+    else
+      nil
+    end
+  end
+
+
+  def self.profile
+    "Import assets into a fedora repository"
+  end
+
+  # save this for something more nifty
+  def self.configure
+
+  end
+
+end
